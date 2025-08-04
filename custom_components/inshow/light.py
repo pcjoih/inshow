@@ -1,4 +1,4 @@
-from homeassistant.components.light import LightEntity, COLOR_MODE_COLOR_TEMP
+from homeassistant.components.light import LightEntity, ColorMode
 from . import DOMAIN
 import logging
 from homeassistant.util.color import value_to_brightness
@@ -39,7 +39,7 @@ class InshowLight(LightEntity):
         self._bright = self._data.get("item").get("bright")
         self._color = self._data.get("item").get("color")
         self._state = self._data.get("item").get("onoff") == 1
-        self._color_mode = COLOR_MODE_COLOR_TEMP
+        self._color_mode = ColorMode.COLOR_TEMP
         self.should_poll = False
         self._max_color_temp_kelvin = 5500
         self._min_color_temp_kelvin = 3500
@@ -119,7 +119,7 @@ class InshowLight(LightEntity):
     @property
     def supported_color_modes(self):
         """Return the supported color modes."""
-        return {COLOR_MODE_COLOR_TEMP}
+        return {ColorMode.COLOR_TEMP}
 
     @property
     def color_mode(self):
