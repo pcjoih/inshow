@@ -7,9 +7,6 @@ import json
 
 _LOGGER = logging.getLogger(__name__)
 
-BRIGHTNESS_SCALE = (0, 100)
-
-
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up Inshow Climate entities from config entry."""
 
