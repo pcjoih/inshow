@@ -8,8 +8,8 @@
   "dependencies": ["mqtt"],
   "documentation": "https://inshowstore.com/",
   "iot_class": "cloud_push",
-  "requirements": ["paho-mqtt==1.6.1", "aiohttp>=3.10.8", "korean-romanizer==0.25.1"],
-  "platforms": ["light"],
-  "version": "1.0.0",
+  "requirements": ["paho-mqtt>=1.6.1", "aiohttp>=3.10.8", "korean-romanizer==0.25.1"],
+  "platforms": ["light", "climate"],
+  "version": "1.1.0",
   "issue_tracker": "https://github.com/pcjoih/inshow/issues"
 }

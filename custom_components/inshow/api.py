@@ -48,10 +48,16 @@ class InshowApi:
 
         def on_message(client, userdata, msg):
             try:
-                data = json.loads(msg.payload.decode())
-                self.hass.loop.call_soon_threadsafe(
-                    async_dispatcher_send, self.hass, "inshow_light_update", data
-                )
+                data = json.loads(msg.payload.decode())                
+                if 'serial' in data:
+                    self.hass.loop.call_soon_threadsafe(
+                        async_dispatcher_send, self.hass, "inshow_light_update", data
+                    )                    
+                else:
+                    data['controllerId'] = msg.topic.split('/')[2]
+                    self.hass.loop.call_soon_threadsafe(
+                    async_dispatcher_send, self.hass, "inshow_climate_update", data
+                    )
                 self._LOGGER.debug(f"Received message '{data}' on topic '{msg.topic}'")
             except Exception as e:
                 self._LOGGER.error(f"Error in on_message: {e}")
@@ -124,6 +130,8 @@ class InshowApi:
                         self.mqtt_subscribe(f"$MTZ/inshow/zone/{id}/state/control")
                     for subs in controller:
                         self.mqtt_subscribe(f"$MTZ/inshow/mcs/{subs}/state/changed")
+                        if subs.startswith("75DFISCA"):
+                            self.mqtt_subscribe(f"stat/inshow/{subs}/#")
                     return True
         except Exception as e:
             self._LOGGER.error(f"Error during data retrieval: {e}")
@@ -132,8 +140,11 @@ class InshowApi:
     def request_data(self, name):
         return self.data[name]
 
-    def request_keys(self):
-        return list(self.data.keys())
+    def request_keys_for_light(self):
+        return [key for key in self.data.keys() if "75DFISCA" not in key]
+    
+    def request_keys_for_climate(self):
+        return [key for key in self.data.keys() if "75DFISCA" in key]
 
     def mqtt_subscribe(self, topic):
         # self.client.subscribe(topic)

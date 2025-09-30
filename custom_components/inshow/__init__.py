@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .api import InshowApi
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.CLIMATE]
 
 type InshowConfigEntry = ConfigEntry[InshowApi]
 DOMAIN = "inshow"

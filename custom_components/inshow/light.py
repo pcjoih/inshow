@@ -17,7 +17,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     api = config_entry.runtime_data
 
     # api에서 모든 엔티티 키를 가져옴 (request_keys 메서드를 사용)
-    keys = api.request_keys()
+    keys = api.request_keys_for_light()
 
     # 엔티티 목록을 만들어서 추가
     lights = [InshowLight(api, key) for key in keys]

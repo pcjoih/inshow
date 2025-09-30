@@ -1,0 +1,16 @@
+[project]
+name = "inshow"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "korean-romanizer==0.25.1",
+    "paho-mqtt==1.6.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.1",
+]
