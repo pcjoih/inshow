@@ -1,4 +1,5 @@
 {
   "name": "inshow",
-  "country": ["KR"]
+  "country": ["KR"],
+  "version": "v1.1.0"
 }
