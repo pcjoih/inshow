@@ -1,19 +1,30 @@
-import aiohttp
 import logging
-import paho.mqtt.client as mqtt
-import ssl
 import random
+import ssl
 import string
+import json
+from datetime import timedelta
+
+import aiohttp
+import paho.mqtt.client as mqtt
 import asyncio
 from korean_romanizer.romanizer import Romanizer
-import json
+
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
+
+TOKEN_REFRESH_INTERVAL = timedelta(hours=1)
 
 
-# TODO 1. 시간마다 토큰 다시 받기
-# TODO 2. MQTT 메시지 처리하기
-# TODO 2-1. state/changed topic에서 메시지 받으면 light entity에서 받아서 처리하기
-# TODO 2-2. HA에서 turn on/off 시 state/control topic으로 메시지 publish하기
+class CannotConnect(Exception):
+    """Error to indicate we cannot connect to the Inshow API."""
+
+
+class InvalidAuth(Exception):
+    """Error to indicate invalid Inshow credentials."""
+
+
 class InshowApi:
     def __init__(self, hass, client_id, client_pw):
         self.hass = hass
@@ -24,46 +35,71 @@ class InshowApi:
         self.client_pw = client_pw
         self.data = None
         self.client = None
+        self._unsub_token_refresh = None
 
-    async def initialize(self):
+    async def login(self):
+        """Authenticate against the Inshow API and store the access token.
+
+        Raises CannotConnect or InvalidAuth on failure.
+        """
         url = f"{self.base_url}/authorize/signIn"
         data = {"type": "e", "email": self.client_id, "password": self.client_pw}
+        session = async_get_clientsession(self.hass)
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=data) as response:
-                    response_data = await response.json()
-                    self.token = response_data.get("resultData").get("accessToken")
-                    if self.token:
-                        self._LOGGER.debug(f"Access token received: {self.token}")
-                    else:
-                        self._LOGGER.error("Failed to retrieve access token")
-        except Exception as e:
-            self._LOGGER.error(f"Error during token retrieval: {e}")
+            async with session.post(url, data=data) as response:
+                if response.status != 200:
+                    raise CannotConnect(f"Unexpected status code {response.status}")
+                response_data = await response.json()
+        except aiohttp.ClientError as err:
+            raise CannotConnect from err
+
+        result_data = response_data.get("resultData") or {}
+        token = result_data.get("accessToken")
+        if not token:
+            raise InvalidAuth("No access token in response")
+
+        self.token = token
+        self._LOGGER.debug("Access token received")
+        return token
+
+    async def _async_refresh_token(self, now=None):
+        """Periodically refresh the access token."""
+        try:
+            await self.login()
+        except (CannotConnect, InvalidAuth) as err:
+            self._LOGGER.error("Failed to refresh access token: %s", err)
+
+    async def initialize(self):
+        await self.login()
+
+        self._unsub_token_refresh = async_track_time_interval(
+            self.hass, self._async_refresh_token, TOKEN_REFRESH_INTERVAL
+        )
 
         def on_connect(client, userdata, flags, rc):
             if rc == 0:
                 self._LOGGER.info("Connected to MQTT broker successfully")
             else:
-                self._LOGGER.error(f"Failed to connect, return code {rc}")
+                self._LOGGER.error("Failed to connect, return code %s", rc)
 
         def on_message(client, userdata, msg):
             try:
-                data = json.loads(msg.payload.decode())                
+                data = json.loads(msg.payload.decode())
                 if 'serial' in data:
                     self.hass.loop.call_soon_threadsafe(
                         async_dispatcher_send, self.hass, "inshow_light_update", data
-                    )                    
+                    )
                 else:
                     data['controllerId'] = msg.topic.split('/')[2]
                     self.hass.loop.call_soon_threadsafe(
                     async_dispatcher_send, self.hass, "inshow_climate_update", data
                     )
-                self._LOGGER.debug(f"Received message '{data}' on topic '{msg.topic}'")
+                self._LOGGER.debug("Received message '%s' on topic '%s'", data, msg.topic)
             except Exception as e:
-                self._LOGGER.error(f"Error in on_message: {e}")
+                self._LOGGER.error("Error in on_message: %s", e)
 
         def on_disconnect(client, userdata, rc):
-            self._LOGGER.warning(f"Disconnected with result code {rc}")
+            self._LOGGER.warning("Disconnected with result code %s", rc)
 
         base_client_id = "inshow_mobile"
         random_suffix = "".join(
@@ -98,43 +134,43 @@ class InshowApi:
             return None
 
         headers = {"Authorization": f"Bearer {self.token}"}
+        session = async_get_clientsession(self.hass)
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.base_url}/zones", headers=headers
-                ) as response:
-                    datas = await response.json()
-                    datas = datas.get("resultData")
+            async with session.get(
+                f"{self.base_url}/zones", headers=headers
+            ) as response:
+                datas = await response.json()
+                datas = datas.get("resultData")
 
-                    controller = set()
-                    entityData = {}
-                    ids = []
-                    for data in datas:
-                        ids.append(data.get("_id"))
-                        for x in data["groups"]:
-                            prefix = Romanizer(x["name"]).romanize() + "_"
-                            for y in x["devices"]:
-                                if not y["isVirtual"]:
-                                    name = prefix + y["name"].replace("번", "")
-                                    entityData[name] = {
-                                        "pri_name": Romanizer(
-                                            data.get("name")
-                                        ).romanize(),
-                                        "id": y["_id"],
-                                        "controllerId": y["controllerId"],
-                                        "item": y["item"],
-                                    }
-                                    controller.add(y["controllerId"])
-                    self.data = entityData
-                    for id in ids:
-                        self.mqtt_subscribe(f"$MTZ/inshow/zone/{id}/state/control")
-                    for subs in controller:
-                        self.mqtt_subscribe(f"$MTZ/inshow/mcs/{subs}/state/changed")
-                        if subs.startswith("75DFISCA"):
-                            self.mqtt_subscribe(f"stat/inshow/{subs}/#")
-                    return True
+                controller = set()
+                entityData = {}
+                ids = []
+                for data in datas:
+                    ids.append(data.get("_id"))
+                    for x in data["groups"]:
+                        prefix = Romanizer(x["name"]).romanize() + "_"
+                        for y in x["devices"]:
+                            if not y["isVirtual"]:
+                                name = prefix + y["name"].replace("번", "")
+                                entityData[name] = {
+                                    "pri_name": Romanizer(
+                                        data.get("name")
+                                    ).romanize(),
+                                    "id": y["_id"],
+                                    "controllerId": y["controllerId"],
+                                    "item": y["item"],
+                                }
+                                controller.add(y["controllerId"])
+                self.data = entityData
+                for id in ids:
+                    self.mqtt_subscribe(f"$MTZ/inshow/zone/{id}/state/control")
+                for subs in controller:
+                    self.mqtt_subscribe(f"$MTZ/inshow/mcs/{subs}/state/changed")
+                    if subs.startswith("75DFISCA"):
+                        self.mqtt_subscribe(f"stat/inshow/{subs}/#")
+                return True
         except Exception as e:
-            self._LOGGER.error(f"Error during data retrieval: {e}")
+            self._LOGGER.error("Error during data retrieval: %s", e)
             return False
 
     def request_data(self, name):
@@ -142,15 +178,20 @@ class InshowApi:
 
     def request_keys_for_light(self):
         return [key for key in self.data.keys() if "75DFISCA" not in key]
-    
+
     def request_keys_for_climate(self):
         return [key for key in self.data.keys() if "75DFISCA" in key]
 
     def mqtt_subscribe(self, topic):
-        # self.client.subscribe(topic)
         self.client.subscribe(topic)
 
     def mqtt_msg(self, topic, msg):
         """Publish an MQTT message."""
-        self._LOGGER.debug(f"MQTT MSG: {msg}")
+        self._LOGGER.debug("MQTT MSG: %s", msg)
         self.client.publish(topic=topic, payload=msg)
+
+    def shutdown(self):
+        """Stop background tasks started by this API instance."""
+        if self._unsub_token_refresh is not None:
+            self._unsub_token_refresh()
+            self._unsub_token_refresh = None

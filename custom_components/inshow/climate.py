@@ -88,14 +88,6 @@ class InshowClimate(ClimateEntity):
     async def async_turn_on(self, **kwargs):
         """Turn the climate on."""
         self._onoff = True
-
-        # 온도 값이 전달되었는지 확인하고 처리
-        if "TempTargetSet" in kwargs:            
-            self._target_temp = float(kwargs["TempTargetSet"])
-
-        if "PatternModeSet" in kwargs:
-            self._pattern = kwargs["PatternModeSet"]
-
         await self._update_state("AwayModeSet")
 
     async def async_turn_off(self, **kwargs):

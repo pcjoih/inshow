@@ -1,3 +1,3 @@
-"""Constants for the hello integration."""
+"""Constants for the inshow integration."""
 
 DOMAIN = "inshow"
