@@ -30,11 +30,13 @@ class InshowClimate(ClimateEntity):
         self._data = api.request_data(name)
         self._cId = self._data.get("controllerId")
         self._pri_name = self._data.get("pri_name")
+        self._group = self._data.get("group")
         self._id = self._data.get("id")
         self._current_temp = float(self._data.get("item").get("currentTemp"))
         self._target_temp = float(self._data.get("item").get("targetTemp"))
         self._onoff = self._data.get("item").get("onoff") == 1
-        self._pattern = self._data.get("item").get("pattern")
+        self._pattern = str(self._data.get("item").get("pattern"))
+        self.should_poll = False
 
     @property
     def name(self):
@@ -66,7 +68,7 @@ class InshowClimate(ClimateEntity):
     
     @property
     def preset_mode(self):
-        return self._pattern
+        return self._pattern if self._pattern in self.preset_modes else None
     
     @property
     def min_temp(self):
@@ -104,7 +106,7 @@ class InshowClimate(ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new preset mode."""
-        self._pattern = preset_mode
+        self._pattern = str(preset_mode)
         await self._update_state("PatternModeSet")
 
     async def _update_state(self, command):
@@ -134,11 +136,11 @@ class InshowClimate(ClimateEntity):
     def device_info(self):
         """Return device information for this entity."""
         return {
-            "identifiers": {(DOMAIN, "IOT")},  # 고유 장치 식별자
-            "name": "Inshow",  # 장치 이름
-            "manufacturer": "Inshow",  # 제조사 이름
-            "model": "Inshow Climate Model",  # 모델 이름
-            "sw_version": "1.0",  # 소프트웨어 버전
+            "identifiers": {(DOMAIN, self._cId)},
+            "name": f"Inshow Thermostat ({self._cId})",
+            "manufacturer": "Inshow",
+            "model": "Inshow Thermostat (T01)",
+            "suggested_area": self._group,
         }
 
     @property
@@ -168,7 +170,7 @@ class InshowClimate(ClimateEntity):
             if 'TempTargetSet' in event_data:
                 self._target_temp = float(event_data.get("TempTargetSet", self._target_temp))
             if 'PatternModeSet' in event_data:
-                self._pattern = event_data.get("PatternModeSet", self._pattern)     
+                self._pattern = str(event_data.get("PatternModeSet", self._pattern))
             # 상태 변경 알림
             self.async_write_ha_state()
         else:

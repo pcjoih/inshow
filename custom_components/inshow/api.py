@@ -1,6 +1,5 @@
 import logging
 import random
-import ssl
 import string
 import json
 from datetime import timedelta
@@ -107,11 +106,22 @@ class InshowApi:
         )
         client_id = f"{base_client_id}_{random_suffix}"
 
-        self.client = mqtt.Client(client_id=client_id, transport="websockets")
+        try:
+            # paho-mqtt 2.x requires an explicit callback API version.
+            self.client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION1,
+                client_id=client_id,
+                transport="websockets",
+            )
+        except AttributeError:
+            # paho-mqtt 1.x does not have CallbackAPIVersion.
+            self.client = mqtt.Client(client_id=client_id, transport="websockets")
 
-        # SSL 설정
-        await asyncio.to_thread(self.client.tls_set, cert_reqs=ssl.CERT_NONE)
-        await asyncio.to_thread(self.client.tls_insecure_set, True)
+        # TLS: verify the broker certificate to prevent MITM attacks.
+        await asyncio.to_thread(self.client.tls_set)
+
+        # Reconnect automatically with backoff if the connection drops.
+        self.client.reconnect_delay_set(min_delay=1, max_delay=120)
 
         # WebSocket 연결 설정
         self.client.ws_set_options(path="/ws")
@@ -143,31 +153,37 @@ class InshowApi:
                 datas = datas.get("resultData")
 
                 controller = set()
+                climate_controllers = set()
                 entityData = {}
                 ids = []
-                for data in datas:
-                    ids.append(data.get("_id"))
-                    for x in data["groups"]:
-                        prefix = Romanizer(x["name"]).romanize() + "_"
-                        for y in x["devices"]:
-                            if not y["isVirtual"]:
-                                name = prefix + y["name"].replace("번", "")
-                                entityData[name] = {
-                                    "pri_name": Romanizer(
-                                        data.get("name")
-                                    ).romanize(),
-                                    "id": y["_id"],
-                                    "controllerId": y["controllerId"],
-                                    "item": y["item"],
-                                }
-                                controller.add(y["controllerId"])
+                for zone in datas:
+                    ids.append(zone.get("_id"))
+                    zone_name = Romanizer(zone.get("name")).romanize()
+                    for group in zone["groups"]:
+                        group_name = group["name"]
+                        prefix = Romanizer(group_name).romanize() + "_"
+                        for y in group["devices"]:
+                            if y.get("isVirtual"):
+                                continue
+                            name = prefix + y["name"].replace("번", "")
+                            entityData[name] = {
+                                "pri_name": zone_name,
+                                "group": group_name,
+                                "id": y["_id"],
+                                "controllerId": y["controllerId"],
+                                "type": y.get("type"),
+                                "item": y["item"],
+                            }
+                            controller.add(y["controllerId"])
+                            if y.get("type") == 2:
+                                climate_controllers.add(y["controllerId"])
                 self.data = entityData
                 for id in ids:
                     self.mqtt_subscribe(f"$MTZ/inshow/zone/{id}/state/control")
                 for subs in controller:
                     self.mqtt_subscribe(f"$MTZ/inshow/mcs/{subs}/state/changed")
-                    if subs.startswith("75DFISCA"):
-                        self.mqtt_subscribe(f"stat/inshow/{subs}/#")
+                for subs in climate_controllers:
+                    self.mqtt_subscribe(f"stat/inshow/{subs}/#")
                 return True
         except Exception as e:
             self._LOGGER.error("Error during data retrieval: %s", e)
@@ -177,10 +193,10 @@ class InshowApi:
         return self.data[name]
 
     def request_keys_for_light(self):
-        return [key for key in self.data.keys() if "75DFISCA" not in key]
+        return [key for key, value in self.data.items() if value.get("type") == 1]
 
     def request_keys_for_climate(self):
-        return [key for key in self.data.keys() if "75DFISCA" in key]
+        return [key for key, value in self.data.items() if value.get("type") == 2]
 
     def mqtt_subscribe(self, topic):
         self.client.subscribe(topic)
