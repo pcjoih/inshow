@@ -1,7 +1,7 @@
 from homeassistant.components.light import LightEntity, ColorMode
 from . import DOMAIN
 import logging
-from homeassistant.util.color import value_to_brightness
+from homeassistant.util.color import value_to_brightness, brightness_to_value
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 import json
 
@@ -35,14 +35,15 @@ class InshowLight(LightEntity):
         self._cId = self._data.get("controllerId")
         self._pri_name = self._data.get("pri_name")
         self._id = self._data.get("id")
-        self._port = self._data.get("item").get("ports")[0]
+        self._ports = self._data.get("item").get("ports") or []
+        self._port = self._ports[0] if self._ports else None
         self._bright = self._data.get("item").get("bright")
         self._color = self._data.get("item").get("color")
         self._state = self._data.get("item").get("onoff") == 1
         self._color_mode = ColorMode.COLOR_TEMP
         self.should_poll = False
-        self._max_color_temp_kelvin = 5500
-        self._min_color_temp_kelvin = 3500
+        self._max_color_temp_kelvin = 5000
+        self._min_color_temp_kelvin = 3000
 
     @property
     def name(self):
@@ -56,17 +57,16 @@ class InshowLight(LightEntity):
         """Turn the light on."""
         self._state = True
 
-        # 밝기 값이 전달되었는지 확인하고 처리
+        # 밝기 값이 전달되었는지 확인하고 처리 (0~255 → 0~100)
         if "brightness" in kwargs:
-            # 0~255 범위의 값을 0~100으로 변환
-            brightness_ha = kwargs["brightness"]
-            self._bright = int((brightness_ha / 255) * 100)
+            self._bright = round(
+                brightness_to_value(BRIGHTNESS_SCALE, kwargs["brightness"])
+            )
 
-        # 색 온도 값이 전달되었는지 확인하고 처리
+        # 색 온도 값이 전달되었는지 확인하고 처리 (K = 3000 + color * 100, color 0~20)
         if "color_temp_kelvin" in kwargs:
             color_temp = kwargs["color_temp_kelvin"]
-            # 3500K ~ 5500K를 0~20 값으로 변환
-            self._color = int(((color_temp - 3500) / 2000) * 20)
+            self._color = max(0, min(20, round((color_temp - 3000) / 100)))
 
         await self._update_state()
 
@@ -84,9 +84,6 @@ class InshowLight(LightEntity):
     def scale_bright(self):
         return int(self._bright // 10) * 10
 
-    def scale_color(self):
-        return int(self._color // 2) * 2
-
     async def _send_mqtt_message(self):
         """Helper function to send an MQTT message."""
         if self._api is None:
@@ -97,10 +94,10 @@ class InshowLight(LightEntity):
             "serial": self._cId,
             "type": 1,
             "data": {
-                "ports": [self._port] if self._port else [],
+                "ports": self._ports,
                 "onoff": 1 if self._state else 0,
                 "bright": self.scale_bright(),
-                "color": self.scale_color(),
+                "color": self._color,
             },
         }
         topic = f"$MTZ/inshow/mcs/{self._cId}/state/control"
@@ -114,7 +111,7 @@ class InshowLight(LightEntity):
 
     @property
     def color_temp_kelvin(self):
-        return int((self._color / 20) * 2000 + 3500)
+        return int(3000 + self._color * 100)
 
     @property
     def supported_color_modes(self):
@@ -137,12 +134,12 @@ class InshowLight(LightEntity):
     @property
     def device_info(self):
         """Return device information for this entity."""
+        model_code = self._cId.split("_")[0] if self._cId else "Light"
         return {
-            "identifiers": {(DOMAIN, "IOT")},  # 고유 장치 식별자
-            "name": "Inshow",  # 장치 이름
-            "manufacturer": "Inshow",  # 제조사 이름
-            "model": "Inshow Light Model",  # 모델 이름
-            "sw_version": "1.0",  # 소프트웨어 버전
+            "identifiers": {(DOMAIN, self._cId)},
+            "name": f"Inshow {model_code} ({self._cId})",
+            "manufacturer": "Inshow",
+            "model": f"Inshow Light Controller ({model_code})",
         }
 
     @property
@@ -163,8 +160,8 @@ class InshowLight(LightEntity):
         ports = data.get("ports", [])
         port = data.get("port", ports[0] if ports else None)
 
-        # 조건: serial이 일치하고 port가 일치하는 경우에만 상태 변경
-        if event_data.get("serial") == self._cId and port == self._port:
+        # 조건: serial이 일치하고 이 조명의 포트 중 하나에 해당할 때만 상태 변경
+        if event_data.get("serial") == self._cId and port in self._ports:
             # 상태 업데이트
             self._state = data.get("onoff", self._state) == 1
             self._bright = data.get("bright", self._bright)
