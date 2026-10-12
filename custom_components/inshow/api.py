@@ -2,6 +2,7 @@ import logging
 import random
 import string
 import json
+import threading
 from datetime import timedelta
 
 import aiohttp
@@ -35,6 +36,10 @@ class InshowApi:
         self.data = None
         self.client = None
         self._unsub_token_refresh = None
+        # Topics to restore after a reconnect; guarded because paho calls
+        # on_connect from its own network thread.
+        self._subscriptions = set()
+        self._subscriptions_lock = threading.Lock()
 
     async def login(self):
         """Authenticate against the Inshow API and store the access token.
@@ -78,6 +83,13 @@ class InshowApi:
         def on_connect(client, userdata, flags, rc):
             if rc == 0:
                 self._LOGGER.info("Connected to MQTT broker successfully")
+                # The broker drops our session on disconnect (clean session),
+                # so every subscription has to be restored after a reconnect.
+                with self._subscriptions_lock:
+                    topics = list(self._subscriptions)
+                if topics:
+                    client.subscribe([(topic, 0) for topic in topics])
+                    self._LOGGER.info("Re-subscribed to %d topics", len(topics))
             else:
                 self._LOGGER.error("Failed to connect, return code %s", rc)
 
@@ -199,6 +211,8 @@ class InshowApi:
         return [key for key, value in self.data.items() if value.get("type") == 2]
 
     def mqtt_subscribe(self, topic):
+        with self._subscriptions_lock:
+            self._subscriptions.add(topic)
         self.client.subscribe(topic)
 
     def mqtt_msg(self, topic, msg):
